@@ -1,17 +1,17 @@
 SHED_TILES = {(4, 4), (5, 4), (4, 5), (5, 5)}
+COOP_POS = (5, 4)
+PASTURE_POS = (4, 4)
+RESERVED = {COOP_POS, PASTURE_POS}
 
 
 def _unit_next_action(pos, tile, seeds, max_x, max_y, inv, shed, day, is_fresh_spawn):
     x, y = pos
     crop = "WHEAT" if (x + y) % 2 == 0 else "CARROT"
 
-    # Right after spawning at a shed-adjacent tile, grab one fertilizer if
-    # available — cheap, single action, no detour needed.
     if is_fresh_spawn and (x, y) in SHED_TILES and inv.get("FERTILIZER", 0) == 0 and shed.get("FERTILIZER", 0) > 0:
         return ["PICKUP", "FERTILIZER", 1]
 
     if isinstance(tile, dict) and tile.get("kind") == "PLANT" and tile.get("crop") in ("WHEAT", "CARROT"):
-        # Apply fertilizer once per plant, before watering, while we're carrying one
         if inv.get("FERTILIZER", 0) > 0 and tile.get("fertilized_until_day", -1) < day:
             return ["FERTILIZE"]
         if not tile.get("watered_today"):
@@ -19,7 +19,7 @@ def _unit_next_action(pos, tile, seeds, max_x, max_y, inv, shed, day, is_fresh_s
         if tile.get("yield_units", 0) > 0:
             return ["HARVEST"]
 
-    if tile is None and seeds.get(crop, 0) > 0:
+    if tile is None and (x, y) not in RESERVED and seeds.get(crop, 0) > 0:
         return ["PLANT", crop]
 
     if y % 2 == 0:
@@ -32,24 +32,24 @@ def _unit_next_action(pos, tile, seeds, max_x, max_y, inv, shed, day, is_fresh_s
         return ["SOUTH"] if y < max_y else ["NORTH"]
 
 
-def _coop_needs_attention(coop_tile):
-    if coop_tile is None:
+def _structure_needs_attention(tile):
+    if tile is None:
         return True
-    if isinstance(coop_tile, dict) and coop_tile.get("kind") == "COOP":
-        if "animal" not in coop_tile:
+    if isinstance(tile, dict) and tile.get("kind") in ("COOP", "PASTURE"):
+        if "animal" not in tile:
             return True
-        if coop_tile.get("yield_units", 0) > 0:
+        if tile.get("yield_units", 0) > 0:
             return True
-        if not coop_tile.get("fed_today"):
+        if not tile.get("fed_today"):
             return True
-        if not coop_tile.get("cared_today"):
+        if not tile.get("cared_today"):
             return True
     return False
 
 
-def _keeper_action(pos, tile, inv, shed, coop_pos):
+def _keeper_action(pos, tile, inv, shed, target_pos, animal, build_op):
     x, y = pos
-    rx, ry = coop_pos
+    rx, ry = target_pos
     if (x, y) != (rx, ry):
         if x < rx:
             return ["EAST"]
@@ -59,13 +59,13 @@ def _keeper_action(pos, tile, inv, shed, coop_pos):
             return ["SOUTH"]
         return ["NORTH"]
     if tile is None:
-        return ["BUILD_COOP"]
-    if isinstance(tile, dict) and tile.get("kind") == "COOP":
+        return [build_op]
+    if isinstance(tile, dict) and tile.get("kind") in ("COOP", "PASTURE"):
         if "animal" not in tile:
-            if inv.get("GOOSE", 0) > 0:
-                return ["PLACE", "GOOSE"]
-            if shed.get("GOOSE", 0) > 0:
-                return ["PICKUP", "GOOSE", 1]
+            if inv.get(animal, 0) > 0:
+                return ["PLACE", animal]
+            if shed.get(animal, 0) > 0:
+                return ["PICKUP", animal, 1]
             return ["PASS"]
         if tile.get("yield_units", 0) > 0:
             return ["HARVEST"]
@@ -89,8 +89,7 @@ def my_agent(obs):
     MONEY_RESERVE = 1000
     LAST_BUY_DAY = 15
     FIRST_BUY_DAY = 3
-    COOP_POS = (5, 4)
-    WHEAT_FEED_RESERVE = 4
+    WHEAT_FEED_RESERVE = 6  # feeding 2 animals now, not 1
 
     player = obs["player"]
     farm = obs["farms"][player]
@@ -123,11 +122,17 @@ def my_agent(obs):
             market_orders.append(["BUY_LAND"])
 
     coop_tile = tiles[COOP_POS[1]][COOP_POS[0]]
-    has_goose_placed = isinstance(coop_tile, dict) and coop_tile.get("animal") == "GOOSE"
-    if "NE" in owned and not has_goose_placed and shed.get("GOOSE", 0) == 0 and money > 300 + MONEY_RESERVE:
-        market_orders.append(["BUY_ANIMAL", "GOOSE", 1])
+    pasture_tile = tiles[PASTURE_POS[1]][PASTURE_POS[0]]
+    has_goose = isinstance(coop_tile, dict) and coop_tile.get("animal") == "GOOSE"
+    has_cow = isinstance(pasture_tile, dict) and pasture_tile.get("animal") == "COW"
 
-    needs_attention = "NE" in owned and _coop_needs_attention(coop_tile)
+    if "NE" in owned and not has_goose and shed.get("GOOSE", 0) == 0 and money > 300 + MONEY_RESERVE:
+        market_orders.append(["BUY_ANIMAL", "GOOSE", 1])
+    if not has_cow and shed.get("COW", 0) == 0 and money > 400 + MONEY_RESERVE:
+        market_orders.append(["BUY_ANIMAL", "COW", 1])
+
+    coop_needs = "NE" in owned and _structure_needs_attention(coop_tile)
+    pasture_needs = _structure_needs_attention(pasture_tile)
 
     fx, fy = farm["farmer"]
     farmer_inv = private["inventories"][0] if private["inventories"] else {}
@@ -135,13 +140,18 @@ def my_agent(obs):
 
     hands_actions = []
     hands = farm["hands"]
-    keeper_assigned = False
+    keepers_assigned = 0
     for i, (hx, hy) in enumerate(hands):
-        at_coop = (hx, hy) == COOP_POS
         hand_inv = private["inventories"][i + 1] if i + 1 < len(private["inventories"]) else {}
-        if i == 0 and (needs_attention or at_coop) and not keeper_assigned:
-            hands_actions.append(_keeper_action((hx, hy), tiles[hy][hx], hand_inv, shed, COOP_POS))
-            keeper_assigned = True
+        at_coop = (hx, hy) == COOP_POS
+        at_pasture = (hx, hy) == PASTURE_POS
+
+        if keepers_assigned == 0 and (coop_needs or at_coop):
+            hands_actions.append(_keeper_action((hx, hy), tiles[hy][hx], hand_inv, shed, COOP_POS, "GOOSE", "BUILD_COOP"))
+            keepers_assigned += 1
+        elif keepers_assigned <= 1 and (pasture_needs or at_pasture):
+            hands_actions.append(_keeper_action((hx, hy), tiles[hy][hx], hand_inv, shed, PASTURE_POS, "COW", "BUILD_PASTURE"))
+            keepers_assigned += 1
         else:
             is_fresh = obs["hour"] == 0
             hands_actions.append(_unit_next_action((hx, hy), tiles[hy][hx], seeds, max_x, max_y, hand_inv, shed, day, is_fresh))
@@ -156,6 +166,9 @@ def my_agent(obs):
     egg_inventory = shed.get("EGG", 0)
     if egg_inventory > 0:
         market_orders.append(["SELL", "EGG", egg_inventory])
+    milk_inventory = shed.get("MILK", 0)
+    if milk_inventory > 0:
+        market_orders.append(["SELL", "MILK", milk_inventory])
 
     return {"farmer": farmer_action, "hands": hands_actions, "market": market_orders}
 
