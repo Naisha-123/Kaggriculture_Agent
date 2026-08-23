@@ -1,16 +1,26 @@
-def _unit_next_action(pos, tile, seeds, max_x, max_y):
+SHED_TILES = {(4, 4), (5, 4), (4, 5), (5, 5)}
+
+
+def _unit_next_action(pos, tile, seeds, max_x, max_y, inv, shed, day, is_fresh_spawn):
     x, y = pos
     crop = "WHEAT" if (x + y) % 2 == 0 else "CARROT"
 
+    # Right after spawning at a shed-adjacent tile, grab one fertilizer if
+    # available — cheap, single action, no detour needed.
+    if is_fresh_spawn and (x, y) in SHED_TILES and inv.get("FERTILIZER", 0) == 0 and shed.get("FERTILIZER", 0) > 0:
+        return ["PICKUP", "FERTILIZER", 1]
+
+    if isinstance(tile, dict) and tile.get("kind") == "PLANT" and tile.get("crop") in ("WHEAT", "CARROT"):
+        # Apply fertilizer once per plant, before watering, while we're carrying one
+        if inv.get("FERTILIZER", 0) > 0 and tile.get("fertilized_until_day", -1) < day:
+            return ["FERTILIZE"]
+        if not tile.get("watered_today"):
+            return ["WATER"]
+        if tile.get("yield_units", 0) > 0:
+            return ["HARVEST"]
+
     if tile is None and seeds.get(crop, 0) > 0:
         return ["PLANT", crop]
-    if isinstance(tile, dict) and tile.get("kind") == "PLANT":
-        c = tile.get("crop")
-        if c in ("WHEAT", "CARROT"):
-            if not tile.get("watered_today"):
-                return ["WATER"]
-            if tile.get("yield_units", 0) > 0:
-                return ["HARVEST"]
 
     if y % 2 == 0:
         if x < max_x:
@@ -67,12 +77,14 @@ def _keeper_action(pos, tile, inv, shed, coop_pos):
             return ["PASS"]
         if not tile.get("cared_today"):
             return ["CARE"]
+        if tile.get("fertilizer_available"):
+            return ["COLLECT_FERTILIZER"]
         return ["PASS"]
     return ["PASS"]
 
 
 def my_agent(obs):
-    HANDS_PER_DAY = 3
+    HANDS_PER_DAY = 5
     LAND_PRICES = [1000, 2000, 4000]
     MONEY_RESERVE = 1000
     LAST_BUY_DAY = 15
@@ -118,19 +130,21 @@ def my_agent(obs):
     needs_attention = "NE" in owned and _coop_needs_attention(coop_tile)
 
     fx, fy = farm["farmer"]
-    farmer_action = _unit_next_action((fx, fy), tiles[fy][fx], seeds, max_x, max_y)
+    farmer_inv = private["inventories"][0] if private["inventories"] else {}
+    farmer_action = _unit_next_action((fx, fy), tiles[fy][fx], seeds, max_x, max_y, farmer_inv, shed, day, False)
 
     hands_actions = []
     hands = farm["hands"]
     keeper_assigned = False
     for i, (hx, hy) in enumerate(hands):
         at_coop = (hx, hy) == COOP_POS
+        hand_inv = private["inventories"][i + 1] if i + 1 < len(private["inventories"]) else {}
         if i == 0 and (needs_attention or at_coop) and not keeper_assigned:
-            hand_inv = private["inventories"][i + 1] if i + 1 < len(private["inventories"]) else {}
             hands_actions.append(_keeper_action((hx, hy), tiles[hy][hx], hand_inv, shed, COOP_POS))
             keeper_assigned = True
         else:
-            hands_actions.append(_unit_next_action((hx, hy), tiles[hy][hx], seeds, max_x, max_y))
+            is_fresh = obs["hour"] == 0
+            hands_actions.append(_unit_next_action((hx, hy), tiles[hy][hx], seeds, max_x, max_y, hand_inv, shed, day, is_fresh))
 
     wheat_inventory = shed.get("WHEAT", 0)
     sellable_wheat = max(0, wheat_inventory - WHEAT_FEED_RESERVE)
