@@ -1,13 +1,17 @@
 def _unit_next_action(pos, tile, seeds, max_x, max_y):
     x, y = pos
-    if tile is None and seeds > 0:
-        return ["PLANT", "WHEAT"]
-    if isinstance(tile, dict) and tile.get("kind") == "PLANT" and tile.get("crop") == "WHEAT":
-        if not tile.get("watered_today"):
-            return ["WATER"]
-        if tile.get("yield_units", 0) > 0:
-            return ["HARVEST"]
-    # Nothing to do here — sweep in a boustrophedon (snake) pattern
+    crop = "WHEAT" if (x + y) % 2 == 0 else "CARROT"
+
+    if tile is None and seeds.get(crop, 0) > 0:
+        return ["PLANT", crop]
+    if isinstance(tile, dict) and tile.get("kind") == "PLANT":
+        c = tile.get("crop")
+        if c in ("WHEAT", "CARROT"):
+            if not tile.get("watered_today"):
+                return ["WATER"]
+            if tile.get("yield_units", 0) > 0:
+                return ["HARVEST"]
+
     if y % 2 == 0:
         if x < max_x:
             return ["EAST"]
@@ -36,7 +40,6 @@ def _coop_needs_attention(coop_tile):
 def _keeper_action(pos, tile, inv, shed, coop_pos):
     x, y = pos
     rx, ry = coop_pos
-
     if (x, y) != (rx, ry):
         if x < rx:
             return ["EAST"]
@@ -45,10 +48,8 @@ def _keeper_action(pos, tile, inv, shed, coop_pos):
         if y < ry:
             return ["SOUTH"]
         return ["NORTH"]
-
     if tile is None:
         return ["BUILD_COOP"]
-
     if isinstance(tile, dict) and tile.get("kind") == "COOP":
         if "animal" not in tile:
             if inv.get("GOOSE", 0) > 0:
@@ -67,7 +68,6 @@ def _keeper_action(pos, tile, inv, shed, coop_pos):
         if not tile.get("cared_today"):
             return ["CARE"]
         return ["PASS"]
-
     return ["PASS"]
 
 
@@ -77,14 +77,14 @@ def my_agent(obs):
     MONEY_RESERVE = 1000
     LAST_BUY_DAY = 15
     FIRST_BUY_DAY = 3
-    COOP_POS = (5, 4)          # a shed-access tile; buildable once NE land is owned
-    WHEAT_FEED_RESERVE = 4     # keep some wheat back to feed the goose, don't sell it all
+    COOP_POS = (5, 4)
+    WHEAT_FEED_RESERVE = 4
 
     player = obs["player"]
     farm = obs["farms"][player]
     tiles = farm["tiles"]
     private = obs["private"]
-    seeds = private["seeds"].get("WHEAT", 0)
+    seeds = private["seeds"]
     shed = private["shed"]
     money = farm["money"]
     day = obs["day"]
@@ -97,8 +97,10 @@ def my_agent(obs):
     market_orders = []
     if obs["hour"] == 0:
         seed_target = num_units + 2
-        if seeds < seed_target:
-            market_orders.append(["BUY_SEED", "WHEAT", seed_target - seeds])
+        if seeds.get("WHEAT", 0) < seed_target:
+            market_orders.append(["BUY_SEED", "WHEAT", seed_target - seeds.get("WHEAT", 0)])
+        if seeds.get("CARROT", 0) < seed_target:
+            market_orders.append(["BUY_SEED", "CARROT", seed_target - seeds.get("CARROT", 0)])
         for _ in range(HANDS_PER_DAY):
             market_orders.append(["HIRE"])
 
@@ -122,8 +124,6 @@ def my_agent(obs):
     hands = farm["hands"]
     keeper_assigned = False
     for i, (hx, hy) in enumerate(hands):
-        # Hand 0 only detours to the coop when it actually needs something,
-        # or it's already standing there mid-task — otherwise it farms wheat.
         at_coop = (hx, hy) == COOP_POS
         if i == 0 and (needs_attention or at_coop) and not keeper_assigned:
             hand_inv = private["inventories"][i + 1] if i + 1 < len(private["inventories"]) else {}
@@ -136,6 +136,9 @@ def my_agent(obs):
     sellable_wheat = max(0, wheat_inventory - WHEAT_FEED_RESERVE)
     if sellable_wheat > 0:
         market_orders.append(["SELL", "WHEAT", sellable_wheat])
+    carrot_inventory = shed.get("CARROT", 0)
+    if carrot_inventory > 0:
+        market_orders.append(["SELL", "CARROT", carrot_inventory])
     egg_inventory = shed.get("EGG", 0)
     if egg_inventory > 0:
         market_orders.append(["SELL", "EGG", egg_inventory])
