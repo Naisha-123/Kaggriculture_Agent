@@ -6,16 +6,23 @@ STRUCTURES = [
 ]
 RESERVED = {s["pos"] for s in STRUCTURES}
 SHED_TILES = {(4, 4), (5, 4), (4, 5), (5, 5)}
+STRAWBERRY_START_DAY = 3  # let wheat/land/animals stabilize first — strawberry seeds are $100 each
+
+
+def _crop_choice(x, y, day):
+    if (x + y) % 2 == 0:
+        return "WHEAT"
+    return "STRAWBERRY" if day >= STRAWBERRY_START_DAY else "WHEAT"
 
 
 def _unit_next_action(pos, tile, seeds, max_x, max_y, inv, shed, day, is_fresh_spawn):
     x, y = pos
-    crop = "WHEAT" if (x + y) % 2 == 0 else "CARROT"
+    crop = _crop_choice(x, y, day)
 
     if is_fresh_spawn and (x, y) in SHED_TILES and inv.get("FERTILIZER", 0) == 0 and shed.get("FERTILIZER", 0) > 0:
         return ["PICKUP", "FERTILIZER", 1]
 
-    if isinstance(tile, dict) and tile.get("kind") == "PLANT" and tile.get("crop") in ("WHEAT", "CARROT"):
+    if isinstance(tile, dict) and tile.get("kind") == "PLANT" and tile.get("crop") in ("WHEAT", "STRAWBERRY"):
         if inv.get("FERTILIZER", 0) > 0 and tile.get("fertilized_until_day", -1) < day:
             return ["FERTILIZE"]
         if not tile.get("watered_today"):
@@ -67,11 +74,9 @@ def _walk_toward(pos, dest):
 
 def _keeper_action(pos, tile, inv, shed, target_pos, shed_stop, animal, build_op):
     x, y = pos
-
     if tile is None:
         step = _walk_toward(pos, target_pos)
         return step if step else [build_op]
-
     if isinstance(tile, dict) and tile.get("kind") in ("COOP", "PASTURE"):
         if "animal" not in tile:
             if inv.get(animal, 0) > 0:
@@ -81,11 +86,9 @@ def _keeper_action(pos, tile, inv, shed, target_pos, shed_stop, animal, build_op
                 step = _walk_toward(pos, shed_stop)
                 return step if step else ["PICKUP", animal, 1]
             return ["PASS"]
-
         if tile.get("yield_units", 0) > 0:
             step = _walk_toward(pos, target_pos)
             return step if step else ["HARVEST"]
-
         if not tile.get("fed_today"):
             if inv.get("WHEAT", 0) > 0:
                 step = _walk_toward(pos, target_pos)
@@ -94,27 +97,25 @@ def _keeper_action(pos, tile, inv, shed, target_pos, shed_stop, animal, build_op
                 step = _walk_toward(pos, shed_stop)
                 return step if step else ["PICKUP", "WHEAT", 1]
             return ["PASS"]
-
         if not tile.get("cared_today"):
             step = _walk_toward(pos, target_pos)
             return step if step else ["CARE"]
-
         if tile.get("fertilizer_available"):
             step = _walk_toward(pos, target_pos)
             return step if step else ["COLLECT_FERTILIZER"]
-
         return ["PASS"]
-
     return ["PASS"]
 
 
 def my_agent(obs):
     HANDS_PER_DAY = 7
     LAND_PRICES = [1000, 2000, 4000]
-    MONEY_RESERVE = 1000
+    LAND_RESERVE = 1000
+    ANIMAL_RESERVE = 200  # lower bar than land — an empty pasture is a bigger relative loss than a thin cash buffer
     LAST_BUY_DAY = 15
     FIRST_BUY_DAY = 3
     WHEAT_FEED_RESERVE = 10
+    STRAWBERRY_SEED_TARGET = 4
 
     player = obs["player"]
     farm = obs["farms"][player]
@@ -135,15 +136,15 @@ def my_agent(obs):
         seed_target = num_units + 2
         if seeds.get("WHEAT", 0) < seed_target:
             market_orders.append(["BUY_SEED", "WHEAT", seed_target - seeds.get("WHEAT", 0)])
-        if seeds.get("CARROT", 0) < seed_target:
-            market_orders.append(["BUY_SEED", "CARROT", seed_target - seeds.get("CARROT", 0)])
+        if day >= STRAWBERRY_START_DAY and seeds.get("STRAWBERRY", 0) < STRAWBERRY_SEED_TARGET and money > 500:
+            market_orders.append(["BUY_SEED", "STRAWBERRY", STRAWBERRY_SEED_TARGET - seeds.get("STRAWBERRY", 0)])
         for _ in range(HANDS_PER_DAY):
             market_orders.append(["HIRE"])
 
     n_extra_owned = len(farm["unlocked_quadrants"]) - 1
     if n_extra_owned < len(LAND_PRICES) and FIRST_BUY_DAY <= day <= LAST_BUY_DAY:
         next_cost = LAND_PRICES[n_extra_owned]
-        if money > next_cost + MONEY_RESERVE:
+        if money > next_cost + LAND_RESERVE:
             market_orders.append(["BUY_LAND"])
 
     demand = {}
@@ -158,7 +159,7 @@ def my_agent(obs):
     for animal, needed in demand.items():
         have = shed.get(animal, 0)
         cost = next(s["cost"] for s in STRUCTURES if s["animal"] == animal)
-        if have < needed and money > cost + MONEY_RESERVE:
+        if have < needed and money > cost + ANIMAL_RESERVE:
             market_orders.append(["BUY_ANIMAL", animal, 1])
 
     fx, fy = farm["farmer"]
@@ -191,7 +192,7 @@ def my_agent(obs):
     sellable_wheat = max(0, wheat_inventory - WHEAT_FEED_RESERVE)
     if sellable_wheat > 0:
         market_orders.append(["SELL", "WHEAT", sellable_wheat])
-    for product in ("CARROT", "EGG", "MILK", "WOOL"):
+    for product in ("STRAWBERRY", "EGG", "MILK", "WOOL"):
         amt = shed.get(product, 0)
         if amt > 0:
             market_orders.append(["SELL", product, amt])
