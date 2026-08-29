@@ -76,9 +76,9 @@ def _keeper_action(pos, tile, inv, shed, target_pos, shed_stop, animal, build_op
 
 
 def my_agent(obs):
-    HANDS_PER_DAY = 11
-    ANIMAL_RESERVE = 600
-    WHEAT_BUY_BUFFER = 20  # buy enough finished wheat daily to cover feeding + a little slack
+    HANDS_PER_DAY = 12
+    ANIMAL_RESERVE = 500
+    WHEAT_BUY_BUFFER = 20
 
     player = obs["player"]
     farm = obs["farms"][player]
@@ -89,8 +89,6 @@ def my_agent(obs):
 
     market_orders = []
     if obs["hour"] == 0:
-        # Priority order matters — only 10 orders/turn are allowed, so put
-        # critical purchases first and let hiring fill whatever's left over.
         wheat_have = shed.get("WHEAT", 0)
         if wheat_have < WHEAT_BUY_BUFFER and money > 500:
             market_orders.append(["BUY_PRODUCT", "WHEAT", WHEAT_BUY_BUFFER - wheat_have])
