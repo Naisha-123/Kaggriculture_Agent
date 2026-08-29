@@ -11,7 +11,7 @@ def _gen_structures(n_cow, n_sheep, shed_stop=(4, 4)):
     return structs
 
 
-STRUCTURES = _gen_structures(n_cow=7, n_sheep=2)
+STRUCTURES = _gen_structures(n_cow=9, n_sheep=3)
 RESERVED = {s["pos"] for s in STRUCTURES}
 
 
@@ -108,6 +108,15 @@ def my_agent(obs):
                 if money > cost + ANIMAL_RESERVE:
                     market_orders.append(["BUY_ANIMAL", animal, 1])
                     money -= cost
+
+        day = obs.get("day", 0)
+        unlocked = farm.get("unlocked_quadrants", ["NW"])
+        if 3 <= day <= 14 and len(market_orders) < 8:
+            for quad, cost in [("NE", 1000), ("SW", 2000), ("SE", 4000)]:
+                if quad not in unlocked and money > cost + ANIMAL_RESERVE and len(market_orders) < 9:
+                    market_orders.append(["BUY_LAND"])
+                    money -= cost
+                    break
 
         hires_room = max(0, 10 - len(market_orders))
         for _ in range(min(HANDS_PER_DAY, hires_room)):
