@@ -1,17 +1,21 @@
+ANIMAL_COST = {"COW": 400, "SHEEP": 500}
+
+
 def _gen_structures(n_cow, n_sheep, shed_stop=(4, 4)):
     candidates = sorted(
         [(x, y) for x in range(5) for y in range(5) if (x, y) != shed_stop],
         key=lambda p: abs(p[0] - shed_stop[0]) + abs(p[1] - shed_stop[1])
     )
     structs = []
-    for pos in candidates[:n_cow]:
-        structs.append({"pos": pos, "animal": "COW", "build": "BUILD_PASTURE", "cost": 400, "shed_stop": shed_stop})
-    for pos in candidates[n_cow:n_cow + n_sheep]:
-        structs.append({"pos": pos, "animal": "SHEEP", "build": "BUILD_PASTURE", "cost": 500, "shed_stop": shed_stop})
+    i = 0
+    for animal, n in (("COW", n_cow), ("SHEEP", n_sheep)):
+        for _ in range(n):
+            structs.append({"pos": candidates[i], "animal": animal, "build": "BUILD_PASTURE", "cost": ANIMAL_COST[animal], "shed_stop": shed_stop})
+            i += 1
     return structs
 
 
-STRUCTURES = _gen_structures(n_cow=9, n_sheep=3)
+STRUCTURES = _gen_structures(n_cow=7, n_sheep=2)
 RESERVED = {s["pos"] for s in STRUCTURES}
 
 
@@ -75,17 +79,47 @@ def _keeper_action(pos, tile, inv, shed, target_pos, shed_stop, animal, build_op
     return ["PASS"]
 
 
+def _idle_crop_action(pos, tile, seeds, inv, day, core_done):
+    x, y = pos
+    if isinstance(tile, dict) and tile.get("kind") == "PLANT" and tile.get("crop") == "TOMATO":
+        if inv.get("FERTILIZER", 0) > 0 and tile.get("fertilized_until_day", -1) < day:
+            return ["FERTILIZE"]
+        if not tile.get("watered_today"):
+            return ["WATER"]
+        if tile.get("yield_units", 0) > 0:
+            return ["HARVEST"]
+        return ["PASS"]
+    if core_done and tile is None and (x, y) not in RESERVED and seeds.get("TOMATO", 0) > 0:
+        return ["PLANT", "TOMATO"]
+    if y % 2 == 0:
+        if x < 4:
+            return ["EAST"]
+        return ["SOUTH"] if y < 4 else ["NORTH"]
+    else:
+        if x > 0:
+            return ["WEST"]
+        return ["SOUTH"] if y < 4 else ["NORTH"]
+
+
 def my_agent(obs):
     HANDS_PER_DAY = 12
     ANIMAL_RESERVE = 500
     WHEAT_BUY_BUFFER = 20
+    TOMATO_SEED_TARGET = 6
 
     player = obs["player"]
     farm = obs["farms"][player]
     tiles = farm["tiles"]
     private = obs["private"]
+    seeds = private["seeds"]
     shed = private["shed"]
     money = farm["money"]
+    day = obs["day"]
+
+    core_done = all(
+        isinstance(tiles[s["pos"][1]][s["pos"][0]], dict) and tiles[s["pos"][1]][s["pos"][0]].get("animal") == s["animal"]
+        for s in STRUCTURES
+    )
 
     market_orders = []
     if obs["hour"] == 0:
@@ -102,21 +136,15 @@ def my_agent(obs):
                 demand[s["animal"]] = demand.get(s["animal"], 0) + 1
         for animal, needed in demand.items():
             have = shed.get(animal, 0)
-            cost = next(s["cost"] for s in STRUCTURES if s["animal"] == animal)
+            cost = ANIMAL_COST[animal]
             to_buy = min(1, needed - have)
             for _ in range(to_buy):
                 if money > cost + ANIMAL_RESERVE:
                     market_orders.append(["BUY_ANIMAL", animal, 1])
                     money -= cost
 
-        day = obs.get("day", 0)
-        unlocked = farm.get("unlocked_quadrants", ["NW"])
-        if 3 <= day <= 14 and len(market_orders) < 8:
-            for quad, cost in [("NE", 1000), ("SW", 2000), ("SE", 4000)]:
-                if quad not in unlocked and money > cost + ANIMAL_RESERVE and len(market_orders) < 9:
-                    market_orders.append(["BUY_LAND"])
-                    money -= cost
-                    break
+        if core_done and seeds.get("TOMATO", 0) < TOMATO_SEED_TARGET and money > 1000:
+            market_orders.append(["BUY_SEED", "TOMATO", TOMATO_SEED_TARGET - seeds.get("TOMATO", 0)])
 
         hires_room = max(0, 10 - len(market_orders))
         for _ in range(min(HANDS_PER_DAY, hires_room)):
@@ -136,7 +164,7 @@ def my_agent(obs):
         farmer_action = _keeper_action((fx, fy), tiles[sy][sx], farmer_inv, shed, s["pos"], s["shed_stop"], s["animal"], s["build"])
         needing = needing[1:]
     else:
-        farmer_action = ["PASS"]
+        farmer_action = _idle_crop_action((fx, fy), tiles[fy][fx], seeds, farmer_inv, day, core_done)
 
     hands_actions = []
     hands = farm["hands"]
@@ -148,9 +176,9 @@ def my_agent(obs):
             hands_actions.append(_keeper_action((hx, hy), tiles[sy][sx], hand_inv, shed, s["pos"], s["shed_stop"], s["animal"], s["build"]))
             needing = needing[1:]
         else:
-            hands_actions.append(["PASS"])
+            hands_actions.append(_idle_crop_action((hx, hy), tiles[hy][hx], seeds, hand_inv, day, core_done))
 
-    for product in ("WOOL", "MILK"):
+    for product in ("WOOL", "MILK", "TOMATO"):
         amt = shed.get(product, 0)
         if amt > 0:
             market_orders.append(["SELL", product, amt])
