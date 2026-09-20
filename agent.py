@@ -1,48 +1,3 @@
-# v21: re-adds GOOSE alongside cow+sheep (6:3:4 ratio), matching Majkel1337's
-# (current #1 player) LATER, higher-scoring matches (95k-134k) exactly --
-# their earlier matches were pure cow+sheep like our v18/v15.
-#
-# Why this matters: v18 scored 827 and literally $0 in two separate real
-# matches, both traced to the same cause -- facing another cow/sheep
-# opponent crashes MILK and WOOL to near-zero for extended periods (WOOL
-# stuck at $1 for 13+ days in one match) while wheat cost climbs, and v18
-# kept spending at full rate into a near-zero-revenue market until it bled
-# to nothing. GOOSE/EGG income is unaffected by an opponent selling
-# milk/wool, so it acts as a floor even when the shared cow/sheep market
-# is fully cratered.
-#
-# Validated: this does NOT clearly increase win rate against the toughest
-# real opponents (still 0/24 in testing, same as v18) -- but it dramatically
-# raises the FLOOR in a simulated crash scenario (min score vs a cow/sheep
-# opponent: 827-$0-class outcomes -> comfortably 10,000+ in every test run)
-# and against real opponents (e.g. floor vs one panel opponent: 467 -> 14,324).
-# Given a single near-zero real match is far more damaging to rating than a
-# modest loss, this trade (flat win rate, much safer floor) is worth taking.
-# An earlier attempt at this same idea (goose-hedge) failed because of a
-# wrong ratio and the same reserve-buffer bug found and fixed here.
-
-# v18: closely matches the pattern confirmed across FOUR independent real
-# opponents this session (Viacheslav Kasatkin, Micah Fernando, Majkel1337 --
-# the current #1 leaderboard player -- and Md. Asif Hossain):
-#   - COW + SHEEP only, no goose
-#   - Land expansion to NW + NE + SW (never SE)
-#   - Hands hired GRADUALLY (ramping from ~4 toward the crew cap over the
-#     first several days) rather than maxed from day 0 -- confirmed as a
-#     real, isolated improvement (win rate vs 3 tough real opponents:
-#     1/24 -> 3/24 from this change alone, keeping everything else fixed)
-#   - A modest ~14-structure scale matched 1:1 to the hand count -- NOT
-#     scaled all the way up to these opponents' real 15-19, since that
-#     scale-up was tested and found to UNDERPERFORM against real
-#     competition despite looking better against a passive baseline
-#
-# Known open gap: even with all of the above, this still loses most
-# games against the toughest real opponents (keiz specifically: 0 wins
-# in testing so far). The strategic parameters (mix/land/hands/scale)
-# match what's winning; something in EXECUTION quality -- likely travel/
-# routing efficiency, wheat self-sufficiency, or selling discipline at
-# scale -- is still the gap. Worth targeted investigation once real
-# match feedback comes in on this version.
-
 ANIMAL_COST = {"COW": 400, "SHEEP": 500, "GOOSE": 300}
 STRUCTURE_KIND = {"COW": "PASTURE", "SHEEP": "PASTURE", "GOOSE": "COOP"}
 BUILD_OP = {"PASTURE": "BUILD_PASTURE", "COOP": "BUILD_COOP"}
@@ -97,9 +52,15 @@ for _idx, _s in enumerate(ALL_STRUCTURES):
 
 
 def _needs_attention(tile):
+    # FIX: hardcoded to PASTURE only (a leftover from v18's cow+sheep-only
+    # design) -- COOP (goose) structures got built fine (the tile-is-None
+    # branch above runs regardless of kind) but this check then silently
+    # reported "nothing needed" forever afterward, since kind=="COOP" never
+    # matched "PASTURE". Confirmed in 5 separate real v21 matches: shed
+    # always held exactly 4 unplaced goose, permanently, day 0 to day 29.
     if tile is None:
         return True
-    if isinstance(tile, dict) and tile.get("kind") == "PASTURE":
+    if isinstance(tile, dict) and tile.get("kind") in ("PASTURE", "COOP"):
         if "animal" not in tile:
             return True
         if tile.get("yield_units", 0) > 0:
